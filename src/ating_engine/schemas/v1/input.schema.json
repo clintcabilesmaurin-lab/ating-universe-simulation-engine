@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ating.universe/schemas/v1/input.schema.json",
+  "title": "SimulationInputContract",
+  "description": "Foundational contract schema for external messages and commands entering the Ating Universe simulation boundary.",
+  "version": "1.0.0",
+  "type": "object",
+  "properties": {
+    "input_id": { "type": "string", "minLength": 1 },
+    "world_id": { "type": "string", "minLength": 1 },
+    "kind": {
+      "type": "string",
+      "enum": ["USER_MESSAGE", "COMMAND", "INJECTION", "SYSTEM_TRIGGER"]
+    },
+    "content": { "type": "string" },
+    "target_agent_id": { "type": ["string", "null"] },
+    "parameters": { "type": "object" },
+    "provenance": {
+      "type": "object",
+      "properties": {
+        "sender_id": { "type": "string", "minLength": 1 },
+        "origin_platform": { "type": "string" },
+        "received_at": { "type": "string", "format": "date-time" }
+      },
+      "required": ["sender_id", "received_at"],
+      "additionalProperties": false
+    },
+    "metadata": { "type": "object" }
+  },
+  "required": ["input_id", "world_id", "kind", "content", "provenance"],
+  "additionalProperties": false
+}

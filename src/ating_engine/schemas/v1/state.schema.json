@@ -1,0 +1,54 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ating.universe/schemas/v1/state.schema.json",
+  "title": "WorldStateContract",
+  "description": "Foundational contract schema for versioned World State in the Ating Universe.",
+  "version": "1.0.0",
+  "type": "object",
+  "properties": {
+    "world": {
+      "type": "object",
+      "properties": {
+        "world_id": { "type": "string", "minLength": 1 },
+        "name": { "type": "string", "minLength": 1 },
+        "timeline_id": { "type": "string" }
+      },
+      "required": ["world_id", "name"],
+      "additionalProperties": false
+    },
+    "state_version": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "logical_time": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "agents": {
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "agent.schema.json"
+      }
+    },
+    "active_events": {
+      "type": "array",
+      "items": {
+        "$ref": "event.schema.json"
+      }
+    },
+    "environment": {
+      "type": "object",
+      "properties": {
+        "weather": { "type": ["string", "null"] },
+        "ambient_context": { "type": ["string", "null"] },
+        "variables": { "type": "object" }
+      },
+      "additionalProperties": false
+    },
+    "metadata": {
+      "type": "object"
+    }
+  },
+  "required": ["world", "state_version", "logical_time", "agents", "active_events"],
+  "additionalProperties": false
+}

@@ -1,0 +1,95 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ating.universe/schemas/v1/agent.schema.json",
+  "title": "AgentContract",
+  "description": "Foundational contract schema for an agent within the Ating Universe simulation engine.",
+  "version": "1.0.0",
+  "type": "object",
+  "properties": {
+    "identity": {
+      "type": "object",
+      "properties": {
+        "agent_id": { "type": "string", "minLength": 1 },
+        "name": { "type": "string", "minLength": 1 },
+        "archetype": { "type": ["string", "null"] }
+      },
+      "required": ["agent_id", "name"],
+      "additionalProperties": false
+    },
+    "status": {
+      "type": "string",
+      "enum": ["ACTIVE", "INACTIVE", "DORMANT", "ARCHIVED"],
+      "default": "ACTIVE"
+    },
+    "state": {
+      "type": "object",
+      "properties": {
+        "location": { "type": ["string", "null"] },
+        "mood": { "type": ["string", "null"] },
+        "energy": { "type": ["number", "null"] },
+        "custom_attributes": { "type": "object" }
+      },
+      "additionalProperties": false
+    },
+    "schedule": {
+      "type": "object",
+      "properties": {
+        "schedule_id": { "type": ["string", "null"] },
+        "current_activity": { "type": ["string", "null"] },
+        "activity_started_at": { "type": ["string", "null"], "format": "date-time" },
+        "activity_ends_at": { "type": ["string", "null"], "format": "date-time" }
+      },
+      "additionalProperties": false
+    },
+    "traits": {
+      "type": "object",
+      "properties": {
+        "trait_profile_id": { "type": ["string", "null"] },
+        "version": { "type": ["string", "null"] },
+        "descriptors": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      },
+      "additionalProperties": false
+    },
+    "needs": {
+      "type": "object",
+      "properties": {
+        "metrics": {
+          "type": "object",
+          "additionalProperties": { "type": "number" }
+        },
+        "last_evaluated_at": { "type": ["string", "null"], "format": "date-time" }
+      },
+      "additionalProperties": false
+    },
+    "relationships": {
+      "type": "object",
+      "properties": {
+        "ties": {
+          "type": "object",
+          "additionalProperties": { "type": "object" }
+        }
+      },
+      "additionalProperties": false
+    },
+    "memory": {
+      "type": "object",
+      "properties": {
+        "memory_cluster_id": { "type": ["string", "null"] },
+        "recent_memory_ids": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "memory_count": { "type": "integer", "minimum": 0 }
+      },
+      "additionalProperties": false
+    },
+    "metadata": {
+      "type": "object"
+    }
+  },
+  "required": ["identity"],
+  "additionalProperties": false
+}

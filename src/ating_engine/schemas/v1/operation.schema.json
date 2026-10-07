@@ -1,0 +1,62 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ating.universe/schemas/v1/operation.schema.json",
+  "title": "SimulationOperationContract",
+  "description": "Foundational contract schema for simulation operations advancing the Ating Universe.",
+  "version": "1.0.0",
+  "type": "object",
+  "properties": {
+    "operation_id": { "type": "string", "minLength": 1 },
+    "world_id": { "type": "string", "minLength": 1 },
+    "engine_version": { "type": "string", "minLength": 1 },
+    "schema_version": { "type": "string", "minLength": 1 },
+    "previous_logical_time": { "type": "string", "format": "date-time" },
+    "target_logical_time": { "type": "string", "format": "date-time" },
+    "previous_state_version": { "type": "integer", "minimum": 0 },
+    "status": {
+      "type": "string",
+      "enum": ["PENDING", "RUNNING", "COMPLETED", "FAILED", "ABORTED"],
+      "default": "PENDING"
+    },
+    "request": {
+      "type": "object",
+      "properties": {
+        "idempotency_key": { "type": ["string", "null"] },
+        "requested_by": { "type": "string" },
+        "inputs": {
+          "type": "array",
+          "items": {
+            "$ref": "input.schema.json"
+          }
+        },
+        "request_parameters": { "type": "object" }
+      },
+      "additionalProperties": false
+    },
+    "result": {
+      "type": "object",
+      "properties": {
+        "target_state_version": { "type": ["integer", "null"], "minimum": 0 },
+        "events_generated_count": { "type": "integer", "minimum": 0 },
+        "events_processed_count": { "type": "integer", "minimum": 0 },
+        "execution_duration_ms": { "type": ["number", "null"] },
+        "error": { "type": ["object", "null"] },
+        "diagnostics": { "type": "object" }
+      },
+      "additionalProperties": false
+    },
+    "created_at": { "type": "string", "format": "date-time" },
+    "completed_at": { "type": ["string", "null"], "format": "date-time" }
+  },
+  "required": [
+    "operation_id",
+    "world_id",
+    "engine_version",
+    "schema_version",
+    "previous_logical_time",
+    "target_logical_time",
+    "previous_state_version",
+    "created_at"
+  ],
+  "additionalProperties": false
+}
