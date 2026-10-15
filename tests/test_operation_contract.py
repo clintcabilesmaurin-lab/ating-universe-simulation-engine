@@ -90,3 +90,12 @@ def test_failed_operation_without_error_details_raises():
     with pytest.raises(ValidationError) as exc:
         validate_operation_invariants(op)
     assert "must include structured error details" in str(exc.value)
+
+
+def test_operation_causality_allows_mixed_naive_and_aware_timestamps():
+    op = create_sample_operation(
+        prev_time="2026-10-06T15:00:00",
+        target_time="2026-10-06T15:37:00+00:00",
+    )
+
+    validate_operation_invariants(op)

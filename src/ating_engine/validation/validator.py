@@ -5,6 +5,7 @@ from typing import Any, Dict, List, Optional
 import jsonschema
 from jsonschema import Draft202012Validator
 
+from ating_engine.clock.time_model import LogicalTime
 from ating_engine.contracts.agent import Agent
 from ating_engine.contracts.event import SimulationEvent
 from ating_engine.contracts.input import SimulationInput
@@ -63,8 +64,8 @@ def validate_raw_json(data: Dict[str, Any], schema_name: str, version: str = "v1
 def validate_operation_invariants(operation: SimulationOperation) -> None:
     """Enforce Python-level business rules and causality invariants on a SimulationOperation."""
     try:
-        t_prev = datetime.fromisoformat(operation.previous_logical_time)
-        t_target = datetime.fromisoformat(operation.target_logical_time)
+        t_prev = LogicalTime.from_iso8601(operation.previous_logical_time).timestamp
+        t_target = LogicalTime.from_iso8601(operation.target_logical_time).timestamp
     except Exception as exc:
         raise ValidationError(
             f"Invalid ISO-8601 logical timestamps in operation {operation.operation_id}: {exc}",
