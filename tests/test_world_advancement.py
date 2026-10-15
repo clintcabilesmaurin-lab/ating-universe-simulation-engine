@@ -1,5 +1,7 @@
 """Tests for the first deterministic world-advancement operation."""
 
+from datetime import datetime, timezone
+
 import pytest
 
 from ating_engine.contracts.agent import Agent, AgentIdentity, AgentState
@@ -555,3 +557,211 @@ def test_later_handlers_see_earlier_due_events_as_processed():
         "event-a"
     ] == EventStatus.PROCESSED.value
     assert [event.event_id for event in result.next_state.active_events] == []
+
+@pytest.mark.parametrize("bad_value", [object()])
+def test_non_json_serializable_handler_output_becomes_validation_error(bad_value):
+    state = make_state()
+    state.active_events = [make_event("event-bad-json", "2026-10-06T15:05:00+00:00")]
+    operation = make_operation()
+
+    def bad_handler(working_state: WorldState, event: SimulationEvent) -> WorldState:
+        working_state.metadata["bad_value"] = bad_value
+        return working_state
+
+    with pytest.raises(ValidationError) as caught:
+        advance_world(state, operation, event_handlers={EventType.SYSTEM.value: bad_handler})
+
+    assert caught.value.operation_id == operation.operation_id
+    assert state.metadata == {}
+
+
+def test_malformed_nested_agent_handler_output_becomes_validation_error():
+    state = make_state_with_agent(energy=0.8)
+    state.active_events = [make_event("event-bad-agent", "2026-10-06T15:05:00+00:00")]
+    operation = make_operation()
+
+    def bad_handler(working_state: WorldState, event: SimulationEvent) -> WorldState:
+        working_state.agents["agent-1"] = {"identity": "not-an-identity"}
+        return working_state
+
+    with pytest.raises(ValidationError) as caught:
+        advance_world(state, operation, event_handlers={EventType.SYSTEM.value: bad_handler})
+
+    assert caught.value.operation_id == operation.operation_id
+    assert state.agents["agent-1"].state.energy == 0.8
+
+
+def test_non_json_serializable_input_state_becomes_validation_error():
+    state = make_state()
+    state.metadata["bad_value"] = object()
+    operation = make_operation()
+
+    with pytest.raises(ValidationError) as caught:
+        advance_world(state, operation)
+
+    assert caught.value.operation_id == operation.operation_id
+    assert state.state_version == 7
+
+
+def test_handler_state_is_normalized_to_json_round_trip_representation():
+    state = make_state()
+    state.active_events = [make_event("event-normalize", "2026-10-06T15:05:00+00:00")]
+
+    def normalize_handler(working_state: WorldState, event: SimulationEvent) -> WorldState:
+        working_state.metadata["pair"] = (1, 2)
+        working_state.metadata["created"] = datetime(2026, 1, 1, tzinfo=timezone.utc)
+        return working_state
+
+    result = advance_world(
+        state, make_operation(), event_handlers={EventType.SYSTEM.value: normalize_handler}
+    )
+
+    assert result.next_state.metadata["pair"] == [1, 2]
+    assert isinstance(result.next_state.metadata["created"], str)
+    assert result.next_state.metadata["created"].startswith("2026-01-01T00:00:00")
+
+
+def test_mixed_offset_events_are_selected_and_sorted_by_utc_instant():
+    state = make_state()
+    state.active_events = [
+        make_event("event-offset", "2026-10-06T14:05:00-01:00"),
+        make_event("event-z", "2026-10-06T15:04:00Z"),
+    ]
+
+    result = advance_world(
+        state, make_operation(), event_handlers={EventType.SYSTEM.value: recording_handler}
+    )
+
+    assert [event.event_id for event in result.processed_events] == ["event-z", "event-offset"]
+
+
+def test_naive_state_time_matches_aware_operation_time():
+    state = make_state(logical_time="2026-10-06T15:00:00")
+    operation = make_operation(previous_logical_time=BASE_TIME)
+
+    result = advance_world(state, operation)
+
+    assert result.next_state.logical_time == TARGET_TIME
+    assert result.next_state.state_version == 8
+
+
+def test_equal_time_operation_processes_event_at_that_instant():
+    state = make_state()
+    state.active_events = [make_event("event-now", BASE_TIME)]
+    operation = make_operation(previous_logical_time=BASE_TIME, target_logical_time=BASE_TIME)
+
+    result = advance_world(
+        state, operation, event_handlers={EventType.SYSTEM.value: recording_handler}
+    )
+
+    assert [event.event_id for event in result.processed_events] == ["event-now"]
+    assert result.next_state.active_events == []
+    assert result.next_state.state_version == 8
+
+
+@pytest.mark.parametrize("protected_field", ["world", "logical_time", "active_events", "state_version"])
+def test_handler_cannot_change_any_engine_owned_envelope_field(protected_field):
+    state = make_state()
+    state.active_events = [make_event("event-envelope", "2026-10-06T15:05:00+00:00")]
+
+    def illegal_handler(working_state: WorldState, event: SimulationEvent) -> WorldState:
+        if protected_field == "world":
+            working_state.world.world_id = "world-other"
+        elif protected_field == "logical_time":
+            working_state.logical_time = "2026-10-06T15:06:00+00:00"
+        elif protected_field == "active_events":
+            working_state.active_events.append(make_event("event-injected", TARGET_TIME))
+        else:
+            working_state.state_version += 1
+        return working_state
+
+    with pytest.raises(InvalidStateTransitionError, match="engine-owned|envelope"):
+        advance_world(
+            state, make_operation(), event_handlers={EventType.SYSTEM.value: illegal_handler}
+        )
+
+
+def test_handler_receives_its_event_time_normalized_to_utc():
+    state = make_state()
+    state.active_events = [make_event("event-local-time", "2026-10-06T17:05:00+02:00")]
+    observed = {}
+
+    def inspect_time(working_state: WorldState, event: SimulationEvent) -> WorldState:
+        observed[event.event_id] = working_state.logical_time
+        return working_state
+
+    advance_world(state, make_operation(), event_handlers={EventType.SYSTEM.value: inspect_time})
+
+    assert observed["event-local-time"] == "2026-10-06T15:05:00+00:00"
+
+
+def test_mutating_handler_event_does_not_mutate_input_or_processed_record():
+    state = make_state()
+    original_event = make_event("event-detached", "2026-10-06T15:05:00+00:00")
+    original_event.payload = {"original": "value"}
+    state.active_events = [original_event]
+
+    def mutate_event(working_state: WorldState, event: SimulationEvent) -> WorldState:
+        event.payload["original"] = "changed"
+        event.occurrence_time = TARGET_TIME
+        return working_state
+
+    result = advance_world(
+        state, make_operation(), event_handlers={EventType.SYSTEM.value: mutate_event}
+    )
+
+    assert state.active_events[0].payload == {"original": "value"}
+    assert state.active_events[0].occurrence_time == "2026-10-06T15:05:00+00:00"
+    assert result.processed_events[0].payload == {"original": "value"}
+    assert result.processed_events[0].occurrence_time == "2026-10-06T15:05:00+00:00"
+
+
+def test_failure_in_later_handler_leaves_original_state_and_operation_unchanged():
+    state = make_state()
+    state.active_events = [
+        make_event("event-first", "2026-10-06T15:05:00+00:00"),
+        make_event("event-second", "2026-10-06T15:07:00+00:00"),
+    ]
+    state.active_events[1].event_type = EventType.ENVIRONMENTAL.value
+    operation = make_operation()
+    original_state = state.model_copy(deep=True)
+    original_operation = operation.model_copy(deep=True)
+
+    def fail_second(working_state: WorldState, event: SimulationEvent) -> WorldState:
+        if event.event_id == "event-second":
+            raise RuntimeError("second handler failure")
+        working_state.metadata["first_handled"] = True
+        return working_state
+
+    with pytest.raises(InternalEngineError):
+        advance_world(
+            state,
+            operation,
+            event_handlers={
+                EventType.SYSTEM.value: fail_second,
+                EventType.ENVIRONMENTAL.value: fail_second,
+            },
+        )
+
+    assert state == original_state
+    assert operation == original_operation
+
+
+def test_unhandled_later_event_prevents_all_handler_invocations():
+    state = make_state()
+    first = make_event("event-first", "2026-10-06T15:05:00+00:00")
+    later = make_event("event-later", "2026-10-06T15:07:00+00:00")
+    later.event_type = "UNREGISTERED_TYPE"
+    state.active_events = [first, later]
+    invoked = []
+
+    def record_invocation(working_state: WorldState, event: SimulationEvent) -> WorldState:
+        invoked.append(event.event_id)
+        return working_state
+
+    with pytest.raises(InvalidStateTransitionError, match="handler"):
+        advance_world(
+            state, make_operation(), event_handlers={EventType.SYSTEM.value: record_invocation}
+        )
+
+    assert invoked == []

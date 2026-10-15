@@ -5,9 +5,10 @@ from copy import deepcopy
 from dataclasses import dataclass
 
 from ating_engine.clock.time_model import LogicalTime
-from ating_engine.contracts.event import EventStatus, SimulationEvent
+from ating_engine.contracts.agent import Agent, AgentIdentity, AgentState
+from ating_engine.contracts.event import EventProvenance, EventStatus, SimulationEvent
 from ating_engine.contracts.operation import OperationStatus, SimulationOperation
-from ating_engine.contracts.state import WorldState
+from ating_engine.contracts.state import EnvironmentState, WorldIdentity, WorldState
 from ating_engine.errors.base import (
     ConcurrencyConflictError,
     EngineError,
@@ -61,6 +62,57 @@ def _validate_state_domain_invariants(state: WorldState, operation_id: str) -> N
         ) from exc
 
 
+def _normalize_and_validate_state(state: WorldState, operation_id: str) -> WorldState:
+    """Return a canonical JSON-round-tripped state or a structured engine error."""
+    try:
+        if not isinstance(state, WorldState):
+            raise ValidationError(
+                "State must be a WorldState instance.",
+                operation_id=operation_id,
+            )
+        if not isinstance(state.world, WorldIdentity) or not isinstance(
+            state.environment, EnvironmentState
+        ):
+            raise ValidationError(
+                "WorldState contains a malformed world or environment model.",
+                operation_id=operation_id,
+            )
+        for agent_id, agent in state.agents.items():
+            if not isinstance(agent, Agent) or not isinstance(
+                agent.identity, AgentIdentity
+            ) or not isinstance(agent.state, AgentState):
+                raise ValidationError(
+                    f"Agent {agent_id!r} is not a valid Agent model.",
+                    operation_id=operation_id,
+                    details={"agent_id": agent_id},
+                )
+        for event in state.active_events:
+            if not isinstance(event, SimulationEvent) or not isinstance(
+                event.provenance, EventProvenance
+            ):
+                raise ValidationError(
+                    "WorldState contains a malformed active event.",
+                    operation_id=operation_id,
+                )
+
+        serialized = state.model_dump(mode="json")
+        # Re-parse after serialization: Pydantic models can be corrupted after
+        # construction, and validation of the serialized contract alone won't catch it.
+        normalized = WorldState.model_validate(serialized)
+        normalized_json = normalized.model_dump(mode="json")
+        _validate_raw_json_contract(normalized_json, "state", operation_id)
+        _validate_state_domain_invariants(normalized, operation_id)
+        return normalized
+    except EngineError:
+        raise
+    except Exception as exc:
+        raise ValidationError(
+            f"Invalid state for operation {operation_id}: {exc}",
+            operation_id=operation_id,
+            details={"exception_type": type(exc).__name__},
+        ) from exc
+
+
 @dataclass(frozen=True)
 class AdvanceWorldResult:
     """Result of one world-state transition and its processed events."""
@@ -82,10 +134,16 @@ def advance_world(
     """
     operation_id = operation.operation_id
 
-    _validate_raw_json_contract(
-        previous_state.model_dump(mode="json"), "state", operation_id
-    )
-    _validate_raw_json_contract(operation.model_dump(mode="json"), "operation", operation_id)
+    previous_state = _normalize_and_validate_state(previous_state, operation_id)
+    try:
+        operation_json = operation.model_dump(mode="json")
+    except Exception as exc:
+        raise ValidationError(
+            f"Invalid operation for operation {operation_id}: {exc}",
+            operation_id=operation_id,
+            details={"exception_type": type(exc).__name__},
+        ) from exc
+    _validate_raw_json_contract(operation_json, "operation", operation_id)
 
     if operation.status not in (OperationStatus.PENDING, OperationStatus.RUNNING):
         raise InvalidStateTransitionError(
@@ -264,10 +322,7 @@ def advance_world(
                 details={"event_id": event.event_id, "changed_fields": changed_envelope_fields},
             )
 
-        _validate_raw_json_contract(
-            handler_result.model_dump(mode="json"), "state", operation_id
-        )
-        _validate_state_domain_invariants(handler_result, operation_id)
+        handler_result = _normalize_and_validate_state(handler_result, operation_id)
 
         working_state = deepcopy(handler_result)
         # Reflect the successful dispatch in the working queue before a later
@@ -290,8 +345,7 @@ def advance_world(
         for event in next_state.active_events
         if event.event_id not in processed_event_ids
     ]
-    _validate_raw_json_contract(next_state.model_dump(mode="json"), "state", operation_id)
-    _validate_state_domain_invariants(next_state, operation_id)
+    next_state = _normalize_and_validate_state(next_state, operation_id)
 
     return AdvanceWorldResult(
         next_state=next_state,
