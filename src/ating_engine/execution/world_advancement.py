@@ -270,6 +270,13 @@ def advance_world(
         _validate_state_domain_invariants(handler_result, operation_id)
 
         working_state = deepcopy(handler_result)
+        # Reflect the successful dispatch in the working queue before a later
+        # event handler observes this state snapshot.
+        for queued_event in working_state.active_events:
+            if queued_event.event_id == event.event_id:
+                queued_event.status = EventStatus.PROCESSED
+                break
+
         processed_event = deepcopy(event)
         processed_event.status = EventStatus.PROCESSED
         processed_events.append(processed_event)

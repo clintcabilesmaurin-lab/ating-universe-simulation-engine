@@ -523,3 +523,35 @@ def test_state_invariant_failure_includes_operation_id():
         advance_world(state, make_operation())
 
     assert caught.value.operation_id == "op-1"
+
+
+def test_later_handlers_see_earlier_due_events_as_processed():
+    state = make_state()
+    state.active_events = [
+        make_event("event-a", "2026-10-06T15:05:00+00:00"),
+        make_event("event-b", "2026-10-06T15:07:00+00:00"),
+    ]
+
+    def inspect_queue(working_state: WorldState, event: SimulationEvent) -> WorldState:
+        statuses = {
+            queued.event_id: queued.status.value
+            for queued in working_state.active_events
+        }
+        working_state.metadata.setdefault("observed_queue_statuses", {})[
+            event.event_id
+        ] = statuses
+        return working_state
+
+    result = advance_world(
+        state,
+        make_operation(),
+        event_handlers={EventType.SYSTEM.value: inspect_queue},
+    )
+
+    assert result.next_state.metadata["observed_queue_statuses"]["event-a"][
+        "event-a"
+    ] == EventStatus.PENDING.value
+    assert result.next_state.metadata["observed_queue_statuses"]["event-b"][
+        "event-a"
+    ] == EventStatus.PROCESSED.value
+    assert [event.event_id for event in result.next_state.active_events] == []
