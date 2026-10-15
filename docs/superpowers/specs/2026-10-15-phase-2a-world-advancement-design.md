@@ -79,6 +79,8 @@ An equal-time operation is valid. It can process pending events exactly at that 
 
 Given equivalent input state, operation, and equivalent pure handlers, execution must produce equivalent output state and event order. Do not use physical wall-clock time, unseeded randomness, iteration order of unordered collections, network results, or LLM output to decide simulation outcomes.
 
+Before JSON normalization, validate source values against their declared field types without coercion. Serializer warnings are errors. Reject non-finite numbers, non-string object keys, binary values, cyclic values, and unordered sets/frozensets rather than silently changing or reordering them. Tuples and date/time values may be normalized intentionally to JSON arrays and ISO-8601 strings, respectively.
+
 Treat the caller-supplied state and operation as read-only. Work on deep copies where needed. A failure must not leave the supplied `WorldState`, its nested agents, or event objects partially modified.
 
 The current event-handler boundary does not infer behavior from an unknown payload. Domain-specific effects belong in explicit handlers and are outside the built-in scope of this first slice. Event generation and recursive processing of newly generated events require a later design.

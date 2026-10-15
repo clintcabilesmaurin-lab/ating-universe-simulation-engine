@@ -765,3 +765,119 @@ def test_unhandled_later_event_prevents_all_handler_invocations():
         )
 
     assert invoked == []
+
+
+
+def test_invalid_input_state_is_rejected_before_any_handler_is_invoked():
+    state = make_state()
+    state.active_events = [make_event("event-invalid-input", "2026-10-06T15:05:00+00:00")]
+    state.metadata["bad_value"] = object()
+    invoked = []
+
+    def record_invocation(working_state: WorldState, event: SimulationEvent) -> WorldState:
+        invoked.append(event.event_id)
+        return working_state
+
+    with pytest.raises(ValidationError):
+        advance_world(
+            state,
+            make_operation(),
+            event_handlers={EventType.SYSTEM.value: record_invocation},
+        )
+
+    assert invoked == []
+
+
+@pytest.mark.parametrize(
+    "bad_value",
+    [
+        float("nan"),
+        {1: "non-string key"},
+        b"bytes are not JSON values",
+        {"nested_unordered_values": {"alpha", "beta", "gamma"}},
+    ],
+    ids=["non-finite-float", "non-string-key", "bytes", "set"],
+)
+def test_handler_output_with_noncanonical_json_values_is_rejected(bad_value):
+    state = make_state()
+    state.active_events = [make_event("event-invalid-json-value", "2026-10-06T15:05:00+00:00")]
+    operation = make_operation()
+    original_state = state.model_copy(deep=True)
+
+    def bad_value_handler(working_state: WorldState, event: SimulationEvent) -> WorldState:
+        working_state.metadata["bad_value"] = bad_value
+        return working_state
+
+    with pytest.raises(ValidationError) as caught:
+        advance_world(
+            state,
+            operation,
+            event_handlers={EventType.SYSTEM.value: bad_value_handler},
+        )
+
+    assert caught.value.operation_id == operation.operation_id
+    assert state == original_state
+
+
+@pytest.mark.parametrize(
+    ("field_name", "bad_value"),
+    [
+        ("energy", True),
+        ("energy", "0.5"),
+        ("state_version", 7.0),
+    ],
+    ids=["boolean-as-float", "string-as-float", "float-as-integer"],
+)
+def test_handler_output_with_coercible_typed_values_is_rejected(field_name, bad_value):
+    state = make_state_with_agent(energy=0.8)
+    state.active_events = [make_event("event-coercible-value", "2026-10-06T15:05:00+00:00")]
+    operation = make_operation()
+    original_state = state.model_copy(deep=True)
+
+    def corrupt_typed_value(working_state: WorldState, event: SimulationEvent) -> WorldState:
+        if field_name == "energy":
+            working_state.agents["agent-1"].state.energy = bad_value
+        else:
+            working_state.state_version = bad_value
+        return working_state
+
+    with pytest.raises(ValidationError):
+        advance_world(
+            state,
+            operation,
+            event_handlers={EventType.SYSTEM.value: corrupt_typed_value},
+        )
+
+    assert state == original_state
+
+
+@pytest.mark.parametrize(
+    ("field_name", "bad_value"),
+    [
+        ("state_version", "7"),
+        ("state_version", 7.0),
+        ("energy", True),
+    ],
+    ids=["string-as-integer", "float-as-integer", "boolean-as-float"],
+)
+def test_input_state_with_coercible_typed_values_is_rejected_before_dispatch(field_name, bad_value):
+    state = make_state_with_agent(energy=0.8) if field_name == "energy" else make_state()
+    state.active_events = [make_event("event-invalid-typed-input", "2026-10-06T15:05:00+00:00")]
+    if field_name == "state_version":
+        state.state_version = bad_value
+    else:
+        state.agents["agent-1"].state.energy = bad_value
+    invoked = []
+
+    def record_invocation(working_state: WorldState, event: SimulationEvent) -> WorldState:
+        invoked.append(event.event_id)
+        return working_state
+
+    with pytest.raises(ValidationError):
+        advance_world(
+            state,
+            make_operation(),
+            event_handlers={EventType.SYSTEM.value: record_invocation},
+        )
+
+    assert invoked == []

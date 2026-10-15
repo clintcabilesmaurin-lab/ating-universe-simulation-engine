@@ -1,8 +1,18 @@
 """Pure logical-time advancement for the Ating Universe simulation."""
 
+import json
 from collections.abc import Callable, Mapping
 from copy import deepcopy
 from dataclasses import dataclass
+from datetime import date, datetime, time
+from enum import Enum
+from math import isfinite
+
+from pydantic import (
+    BaseModel,
+    TypeAdapter,
+    ValidationError as PydanticValidationError,
+)
 
 from ating_engine.clock.time_model import LogicalTime
 from ating_engine.contracts.agent import Agent, AgentIdentity, AgentState
@@ -26,6 +36,76 @@ from ating_engine.validation.validator import (
 
 
 EventHandler = Callable[[WorldState, SimulationEvent], WorldState]
+
+
+def _validate_canonical_source_values(state: WorldState, operation_id: str) -> None:
+    """Reject source values whose JSON normalization would lose or reorder data."""
+    active_containers: set[int] = set()
+
+    def reject(value: object, path: str, reason: str) -> None:
+        raise ValidationError(
+            f"Invalid state value at {path}: {reason}.",
+            operation_id=operation_id,
+            details={"path": path, "value_type": type(value).__name__},
+        )
+
+    def visit(value: object, path: str) -> None:
+        if value is None or isinstance(value, (str, bool, int)):
+            return
+        if isinstance(value, float):
+            if not isfinite(value):
+                reject(value, path, "non-finite numbers are not valid state values")
+            return
+        if isinstance(value, Enum):
+            visit(value.value, path)
+            return
+        # These are intentionally normalized to ISO-8601 strings by JSON mode.
+        if isinstance(value, (datetime, date, time)):
+            return
+        if isinstance(value, (bytes, bytearray, memoryview)):
+            reject(value, path, "binary values are not part of the JSON state contract")
+        if isinstance(value, (set, frozenset)):
+            reject(value, path, "unordered collections are not deterministic JSON values")
+
+        is_model = isinstance(value, BaseModel)
+        is_mapping = isinstance(value, Mapping)
+        is_sequence = isinstance(value, (list, tuple))
+        if not (is_model or is_mapping or is_sequence):
+            reject(value, path, "value is not supported by the JSON state contract")
+
+        identity = id(value)
+        if identity in active_containers:
+            reject(value, path, "cyclic values are not supported by the JSON state contract")
+        active_containers.add(identity)
+        try:
+            if is_model:
+                for field_name, model_field in type(value).model_fields.items():
+                    field_value = getattr(value, field_name)
+                    field_path = f"{path}.{field_name}"
+                    try:
+                        TypeAdapter(model_field.annotation).validate_python(
+                            field_value,
+                            strict=True,
+                        )
+                    except (PydanticValidationError, TypeError, ValueError) as exc:
+                        reject(
+                            field_value,
+                            field_path,
+                            f"value does not match the declared field type ({exc})",
+                        )
+                    visit(field_value, field_path)
+            elif is_mapping:
+                for key, child in value.items():
+                    if not isinstance(key, str):
+                        reject(key, path, "mapping keys must be strings")
+                    visit(child, f"{path}.{key}")
+            else:
+                for index, child in enumerate(value):
+                    visit(child, f"{path}[{index}]")
+        finally:
+            active_containers.remove(identity)
+
+    visit(state, "$")
 
 
 def _validate_raw_json_contract(
@@ -95,11 +175,15 @@ def _normalize_and_validate_state(state: WorldState, operation_id: str) -> World
                     operation_id=operation_id,
                 )
 
-        serialized = state.model_dump(mode="json")
-        # Re-parse after serialization: Pydantic models can be corrupted after
-        # construction, and validation of the serialized contract alone won't catch it.
-        normalized = WorldState.model_validate(serialized)
-        normalized_json = normalized.model_dump(mode="json")
+        _validate_canonical_source_values(state, operation_id)
+        serialized = state.model_dump(mode="json", warnings="error")
+        # Strictly parse the JSON representation so values like True -> 1.0 or
+        # 7.0 -> 7 are rejected instead of silently repaired by Pydantic.
+        normalized = WorldState.model_validate_json(
+            json.dumps(serialized, allow_nan=False),
+            strict=True,
+        )
+        normalized_json = normalized.model_dump(mode="json", warnings="error")
         _validate_raw_json_contract(normalized_json, "state", operation_id)
         _validate_state_domain_invariants(normalized, operation_id)
         return normalized
@@ -136,7 +220,7 @@ def advance_world(
 
     previous_state = _normalize_and_validate_state(previous_state, operation_id)
     try:
-        operation_json = operation.model_dump(mode="json")
+        operation_json = operation.model_dump(mode="json", warnings="error")
     except Exception as exc:
         raise ValidationError(
             f"Invalid operation for operation {operation_id}: {exc}",
