@@ -558,14 +558,13 @@ def test_later_handlers_see_earlier_due_events_as_processed():
     ] == EventStatus.PROCESSED.value
     assert [event.event_id for event in result.next_state.active_events] == []
 
-@pytest.mark.parametrize("bad_value", [object()])
-def test_non_json_serializable_handler_output_becomes_validation_error(bad_value):
+def test_non_json_serializable_handler_output_becomes_validation_error():
     state = make_state()
     state.active_events = [make_event("event-bad-json", "2026-10-06T15:05:00+00:00")]
     operation = make_operation()
 
     def bad_handler(working_state: WorldState, event: SimulationEvent) -> WorldState:
-        working_state.metadata["bad_value"] = bad_value
+        working_state.metadata["bad_value"] = object()
         return working_state
 
     with pytest.raises(ValidationError) as caught:
@@ -881,3 +880,31 @@ def test_input_state_with_coercible_typed_values_is_rejected_before_dispatch(fie
         )
 
     assert invoked == []
+
+
+def test_invalid_handler_output_is_rejected_before_later_handler_is_invoked():
+    state = make_state()
+    state.active_events = [
+        make_event("event-invalid-first", "2026-10-06T15:05:00+00:00"),
+        make_event("event-later", "2026-10-06T15:07:00+00:00"),
+    ]
+    state.active_events[1].event_type = EventType.ENVIRONMENTAL.value
+    invoked = []
+
+    def invalid_first(working_state: WorldState, event: SimulationEvent) -> WorldState:
+        invoked.append(event.event_id)
+        if event.event_id == "event-invalid-first":
+            working_state.metadata["invalid"] = float("nan")
+        return working_state
+
+    with pytest.raises(ValidationError):
+        advance_world(
+            state,
+            make_operation(),
+            event_handlers={
+                EventType.SYSTEM.value: invalid_first,
+                EventType.ENVIRONMENTAL.value: invalid_first,
+            },
+        )
+
+    assert invoked == ["event-invalid-first"]
